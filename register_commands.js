@@ -89,7 +89,11 @@ const commands = [
                 .setDescription('SOP/Documentation URL (optional)'))
         .addStringOption(option => 
             option.setName('agency-name')
-                .setDescription('Main agency name for the title (default: server name)'))
+                .setDescription('Main agency name for the title (default: server name)')),
+
+    new SlashCommandBuilder()
+        .setName('bulk-assign-unassigned')
+        .setDescription('Assign the Unassigned role to all existing server members'),
 
 ].map(command => command.toJSON());
 

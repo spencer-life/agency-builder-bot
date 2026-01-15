@@ -131,7 +131,8 @@ client.on(Events.InteractionCreate, async interaction => {
             'add-agency-structure',
             'map-hierarchy',
             'build-template',
-            'deploy-welcome-guide'
+            'deploy-welcome-guide',
+            'bulk-assign-unassigned'
         ];
         if (adminCommands.includes(commandName) && interaction.user.id !== SPENCER_ID) {
             return interaction.reply({ content: "Access Denied: Spencer only.", ephemeral: true });
@@ -506,6 +507,43 @@ client.on(Events.InteractionCreate, async interaction => {
 
             await interaction.channel.send({ embeds: [welcomeEmbed] });
             return interaction.reply({ content: '✅ Welcome guide deployed!', ephemeral: true });
+        }
+
+        if (commandName === 'bulk-assign-unassigned') {
+            await interaction.deferReply({ ephemeral: true });
+            
+            const config = await getServerConfig(interaction.guild.id);
+            if (!config || !config.unassigned_role_id) {
+                return interaction.editReply("No Unassigned role configured. Run /setup-server first.");
+            }
+            
+            const members = await interaction.guild.members.fetch();
+            const role = await interaction.guild.roles.fetch(config.unassigned_role_id);
+            
+            if (!role) {
+                return interaction.editReply("The configured Unassigned role could not be found in the server.");
+            }
+
+            let assigned = 0, skipped = 0, failed = 0;
+            
+            for (const [, member] of members) {
+                if (member.user.bot) { skipped++; continue; }
+                if (member.roles.cache.has(role.id)) { skipped++; continue; }
+                
+                try {
+                    await member.roles.add(role);
+                    assigned++;
+                } catch (err) {
+                    failed++;
+                }
+            }
+            
+            return interaction.editReply(
+                `**Bulk Assignment Complete**\n` +
+                `Assigned: ${assigned}\n` +
+                `Skipped (bots/already assigned): ${skipped}\n` +
+                `Failed: ${failed}`
+            );
         }
     }
 
