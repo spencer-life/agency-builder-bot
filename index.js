@@ -721,6 +721,13 @@ client.on(Events.InteractionCreate, async interaction => {
                     await announcementChannel.send({ embeds: [welcomeEmbed] });
                 }
             }
+
+            // Set nickname to agent's legal name
+            if (interaction.member.manageable) {
+                await interaction.member.setNickname(agentName.substring(0, 32)).catch(err => {
+                    console.error(`Could not set nickname for ${interaction.user.tag}:`, err.message);
+                });
+            }
             
             // Save Mapping
             await pool.query(
