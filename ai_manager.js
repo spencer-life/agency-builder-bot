@@ -25,6 +25,10 @@ async function parseInsuranceCommand(input) {
     - Return ONLY a JSON object with an "actions" array.
     - Pick a single relevant emoji for each agency.
     - If the user mentions a "main" or "top" agency, set is_main: true.
+    - ALWAYS include CREATE_MAIN_STRUCTURE before INITIALIZE unless user explicitly says not to.
+    - If user says "wipe" or "wipe first" or "start fresh", include WIPE action FIRST.
+    - Parse hierarchy relationships like "X under Y" or "X -> Y" or "X reports to Y" into MAP actions.
+    - Default to creating base channels unless user says "agencies only".
     
     Structure Example:
     {

@@ -71,7 +71,25 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('list-webhooks')
-        .setDescription('Show all webhook channels and their purposes')
+        .setDescription('Show all webhook channels and their purposes'),
+
+    new SlashCommandBuilder()
+        .setName('build-template')
+        .setDescription('Shows the exact format needed for building agency structure, then builds via AI'),
+
+    new SlashCommandBuilder()
+        .setName('deploy-welcome-guide')
+        .setDescription('Deploy the welcome/walkthrough embed in the current channel')
+        .addStringOption(option => 
+            option.setName('form-url')
+                .setDescription('Production submission form URL')
+                .setRequired(true))
+        .addStringOption(option => 
+            option.setName('sop-url')
+                .setDescription('SOP/Documentation URL (optional)'))
+        .addStringOption(option => 
+            option.setName('agency-name')
+                .setDescription('Main agency name for the title (default: server name)'))
 
 ].map(command => command.toJSON());
 

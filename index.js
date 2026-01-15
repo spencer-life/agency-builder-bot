@@ -44,6 +44,22 @@ const client = new Client({
 const SPENCER_ID = process.env.SPENCER_DISCORD_ID;
 
 const wizardSessions = new Map(); // userId -> wizardData
+const pendingWipes = new Map(); // pendingWipeId -> { guild, channelId, actions, interaction, messageCollector? }
+
+/**
+ * Execute wipe with all channels except the current one
+ */
+async function executeWipe(guild, protectedChannelId) {
+    const channels = await guild.channels.fetch();
+    let deleted = 0;
+    for (const c of channels.values()) {
+        if (c && c.id !== protectedChannelId) {
+            await c.delete().catch(() => {});
+            deleted++;
+        }
+    }
+    return deleted;
+}
 
 // --- EXPRESS SERVER FOR BADGE SYNC ---
 const app = express();
@@ -99,7 +115,24 @@ client.on(Events.InteractionCreate, async interaction => {
         const { commandName } = interaction;
 
         // Security check for administrative commands
-        const adminCommands = ['war-room', 'setup-server', 'initialize-agencies', 'wipe-structure', 'add-leader-code', 'list-leader-codes', 'remove-leader-code', 'organize-channels'];
+        const adminCommands = [
+            'war-room', 
+            'setup-server', 
+            'initialize-agencies', 
+            'add-leader-code', 
+            'list-leader-codes', 
+            'remove-leader-code', 
+            'organize-channels',
+            'deploy-onboarding-portal',
+            'register-agent',
+            'clear-channel',
+            'export-member-ids',
+            'list-webhooks',
+            'add-agency-structure',
+            'map-hierarchy',
+            'build-template',
+            'deploy-welcome-guide'
+        ];
         if (adminCommands.includes(commandName) && interaction.user.id !== SPENCER_ID) {
             return interaction.reply({ content: "Access Denied: Spencer only.", ephemeral: true });
         }
@@ -119,27 +152,54 @@ client.on(Events.InteractionCreate, async interaction => {
                 const result = await parseInsuranceCommand(prompt);
                 if (!result || !result.actions) return interaction.editReply("Could not parse instructions.");
                 
+                // Check if wipe is requested - needs confirmation
+                const hasWipe = result.actions.some(a => a.type === 'WIPE');
+                if (hasWipe) {
+                    const wipeId = `wipe_${Date.now()}`;
+                    pendingWipes.set(wipeId, {
+                        guild: interaction.guild,
+                        channelId: interaction.channelId,
+                        actions: result.actions,
+                        interaction: interaction
+                    });
+
+                    const wipeEmbed = new EmbedBuilder()
+                        .setTitle('⚠️ Destructive Action Warning')
+                        .setDescription('You are about to **DELETE ALL CHANNELS** in this server.\n\nExisting channels with messages will be **permanently lost**.')
+                        .setColor('#FF0000')
+                        .addFields(
+                            { name: 'Server', value: interaction.guild.name, inline: true },
+                            { name: 'Action', value: 'Full channel wipe', inline: true }
+                        )
+                        .setFooter({ text: 'This cannot be undone. Confirm within 30 seconds.' });
+
+                    const confirmRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`confirm_wipe_${wipeId}`).setLabel('Confirm Wipe').setStyle(ButtonStyle.Danger),
+                        new ButtonBuilder().setCustomId(`cancel_wipe_${wipeId}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+                    );
+
+                    return interaction.editReply({ content: null, embeds: [wipeEmbed], components: [confirmRow] });
+                }
+
+                // No wipe - execute actions directly
                 let report = "🚀 **Executing Build...**\n";
                 for (const action of result.actions) {
                     try {
-                        if (action.type === 'WIPE') {
-                            // Safe Wipe
-                            const channels = await interaction.guild.channels.fetch();
-                            for (const c of channels.values()) {
-                                if (c && c.id !== interaction.channelId && !c.parentId === interaction.channelId) {
-                                    await c.delete().catch(() => {});
-                                }
-                            }
-                            report += "✅ Wiped old structure\n";
-                        } else if (action.type === 'CREATE_MAIN_STRUCTURE') {
+                        if (action.type === 'CREATE_MAIN_STRUCTURE') {
                             await createMainStructure(interaction.guild);
                             report += "✅ Created Main Structure\n";
                         } else if (action.type === 'INITIALIZE') {
                             await initializeAgencies(interaction.guild, action.agencies);
                             report += `✅ Initialized ${action.agencies.length} agencies\n`;
                         } else if (action.type === 'MAP') {
-                            // Needs more logic to find agency IDs from names
-                            report += `⚠️ Manual hierarchy mapping might be needed for: ${action.downline}\n`;
+                            const downline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.downline, interaction.guild.id]);
+                            const upline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.upline, interaction.guild.id]);
+                            if (downline.rows.length > 0 && upline.rows.length > 0) {
+                                await mapHierarchy(interaction.guild, downline.rows[0].agency_id, upline.rows[0].agency_id);
+                                report += `✅ Mapped ${action.downline} → ${action.upline}\n`;
+                            } else {
+                                report += `⚠️ Could not find agencies for: ${action.downline} → ${action.upline}\n`;
+                            }
                         }
                     } catch (e) {
                         report += `❌ Error: ${e.message}\n`;
@@ -263,6 +323,121 @@ client.on(Events.InteractionCreate, async interaction => {
             return interaction.editReply(results.join('\n') || "No changes needed.");
         }
 
+        if (commandName === 'add-agency-structure') {
+            const agencyName = interaction.options.getString('agency-name');
+            await interaction.deferReply({ ephemeral: true });
+            await addAgencyStructure(interaction.guild, [{ name: agencyName }], { skipExisting: true });
+            return interaction.editReply(`✅ Added agency structure for: ${agencyName}`);
+        }
+
+        if (commandName === 'map-hierarchy') {
+            const downlineId = interaction.options.getInteger('downline-id');
+            const uplineId = interaction.options.getInteger('upline-id');
+            await interaction.deferReply({ ephemeral: true });
+            await mapHierarchy(interaction.guild, downlineId, uplineId);
+            return interaction.editReply(`✅ Mapped hierarchy: Agency ${downlineId} now reports to Agency ${uplineId}`);
+        }
+
+        if (commandName === 'build-template') {
+            const templateEmbed = new EmbedBuilder()
+                .setTitle('🏗️ Agency Builder Template')
+                .setDescription('Reply to this message with your agency structure in natural language. I will parse it and build everything.')
+                .addFields(
+                    { 
+                        name: '📋 Required Information', 
+                        value: '1. **Main Agency Name** (top-level, visible to all)\n2. **Sub-Agencies** (agencies under the main)\n3. **Nested Hierarchy** (any agencies under sub-agencies)' 
+                    },
+                    { 
+                        name: '✅ Example Format', 
+                        value: 'Main Agency: Reflect Agencies\nSub-Agencies: The Vault, Palace Financial, Enrich\nHierarchy: Empyra under The Vault, Krafty under Palace Financial'
+                    },
+                    {
+                        name: '💬 Natural Language Examples',
+                        value: '• "Build Reflect Agencies as main with lion emoji. Add The Vault, Palace, and Enrich under it."\n• "Create main agency ABC Insurance. Sub-agencies are Team Alpha and Team Beta. Team Gamma is under Team Alpha."'
+                    },
+                    {
+                        name: '⚠️ Options',
+                        value: '• Add "wipe first" to clear existing structure\n• Add emojis like "lion emoji" or "diamond emoji"'
+                    }
+                )
+                .setColor('#FFD700')
+                .setFooter({ text: 'Reply within 5 minutes with your structure description' });
+
+            await interaction.reply({ embeds: [templateEmbed] });
+
+            // Collect the next message from Spencer
+            const filter = m => m.author.id === SPENCER_ID;
+            const collector = interaction.channel.createMessageCollector({ filter, time: 300000, max: 1 });
+
+            collector.on('collect', async m => {
+                await m.react('⏳');
+                
+                const result = await parseInsuranceCommand(m.content);
+                if (!result || !result.actions) {
+                    await m.reply("❌ Could not parse your instructions. Please try again with clearer formatting.");
+                    return;
+                }
+
+                // Check if wipe is requested
+                const hasWipe = result.actions.some(a => a.type === 'WIPE');
+                if (hasWipe) {
+                    const wipeId = `wipe_${Date.now()}`;
+                    pendingWipes.set(wipeId, {
+                        guild: interaction.guild,
+                        channelId: interaction.channelId,
+                        actions: result.actions,
+                        originalMessage: m
+                    });
+
+                    const wipeEmbed = new EmbedBuilder()
+                        .setTitle('⚠️ Destructive Action Warning')
+                        .setDescription('You are about to **DELETE ALL CHANNELS** in this server.\n\nExisting channels with messages will be **permanently lost**.')
+                        .setColor('#FF0000')
+                        .addFields(
+                            { name: 'Server', value: interaction.guild.name, inline: true },
+                            { name: 'Action', value: 'Full channel wipe', inline: true }
+                        )
+                        .setFooter({ text: 'This cannot be undone. Confirm within 30 seconds.' });
+
+                    const confirmRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`confirm_wipe_template_${wipeId}`).setLabel('Confirm Wipe').setStyle(ButtonStyle.Danger),
+                        new ButtonBuilder().setCustomId(`cancel_wipe_template_${wipeId}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+                    );
+
+                    await m.reply({ embeds: [wipeEmbed], components: [confirmRow] });
+                    return;
+                }
+
+                // No wipe - execute directly
+                let report = "🚀 **Executing Build...**\n";
+                for (const action of result.actions) {
+                    try {
+                        if (action.type === 'CREATE_MAIN_STRUCTURE') {
+                            await createMainStructure(interaction.guild);
+                            report += "✅ Created Main Structure\n";
+                        } else if (action.type === 'INITIALIZE') {
+                            await initializeAgencies(interaction.guild, action.agencies);
+                            report += `✅ Initialized ${action.agencies.length} agencies\n`;
+                        } else if (action.type === 'MAP') {
+                            const downline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.downline, interaction.guild.id]);
+                            const upline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.upline, interaction.guild.id]);
+                            
+                            if (downline.rows.length > 0 && upline.rows.length > 0) {
+                                await mapHierarchy(interaction.guild, downline.rows[0].agency_id, upline.rows[0].agency_id);
+                                report += `✅ Mapped ${action.downline} → ${action.upline}\n`;
+                            } else {
+                                report += `⚠️ Could not find agencies: ${action.downline} → ${action.upline}\n`;
+                            }
+                        }
+                    } catch (e) {
+                        report += `❌ Error: ${e.message}\n`;
+                    }
+                }
+                
+                await m.reply(report);
+            });
+        }
+
         if (commandName === 'export-member-ids') {
             await interaction.deferReply({ ephemeral: true });
             const members = await interaction.guild.members.fetch();
@@ -297,6 +472,40 @@ client.on(Events.InteractionCreate, async interaction => {
                 )
                 .setColor('#3498DB');
             return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
+        if (commandName === 'deploy-welcome-guide') {
+            const formUrl = interaction.options.getString('form-url');
+            const sopUrl = interaction.options.getString('sop-url');
+            const agencyName = interaction.options.getString('agency-name') || interaction.guild.name;
+
+            const welcomeEmbed = new EmbedBuilder()
+                .setTitle(`🏠 Welcome to ${agencyName} 👋`)
+                .setDescription('Your central hub for production tracking, leaderboards, resources, and team wins.')
+                .addFields(
+                    {
+                        name: '📋 STEP 1: Select Your Agency',
+                        value: '> Click your agency button below to unlock your team\'s private channels.\n> Only select the agency you are **DIRECT** to.\n> **Leaders:** Click "Leader Access 🔑" and enter your code.'
+                    },
+                    {
+                        name: '🚀 STEP 2: Submit Your Production',
+                        value: `> Every deal you write goes here:\n> **[CLICK HERE TO SUBMIT](${formUrl})**`
+                    },
+                    {
+                        name: '📺 Channel Guide',
+                        value: '**LEADERBOARDS 🏆** → Daily, weekly, monthly rankings\n**LIVE 🔴** → Real-time deal notifications\n**YOUR AGENCY** → Team chat, wins, resources, voice rooms\n**SUPPORT ❓** → Questions and underwriting help\n**RESOURCES 📄** → Carrier guides, tools, contacts'
+                    },
+                    {
+                        name: '❓ Need Help?',
+                        value: `• **Discord Beginner?** [Start Here](https://support.discord.com/hc/en-us/articles/360045138571-Beginner-s-Guide-to-Discord)${sopUrl ? `\n• **Full SOP Guide:** [View Document](${sopUrl})` : ''}`
+                    }
+                )
+                .setColor('#FFD700')
+                .setFooter({ text: '👇 Select your agency below to get started' })
+                .setTimestamp();
+
+            await interaction.channel.send({ embeds: [welcomeEmbed] });
+            return interaction.reply({ content: '✅ Welcome guide deployed!', ephemeral: true });
         }
     }
 
@@ -376,6 +585,94 @@ client.on(Events.InteractionCreate, async interaction => {
             wizardSessions.delete(interaction.user.id);
             return interaction.reply({ content: "Build cancelled.", ephemeral: true });
         }
+
+        if (interaction.customId.startsWith('confirm_wipe_')) {
+            const wipeId = interaction.customId.replace('confirm_wipe_', '');
+            const wipeData = pendingWipes.get(wipeId);
+            
+            if (!wipeData) {
+                return interaction.reply({ content: '❌ Wipe session expired. Please start over.', ephemeral: true });
+            }
+
+            await interaction.deferUpdate();
+            pendingWipes.delete(wipeId);
+
+            let report = "🚀 **Executing Build (with wipe)...**\n";
+            for (const action of wipeData.actions) {
+                try {
+                    if (action.type === 'WIPE') {
+                        const deleted = await executeWipe(wipeData.guild, wipeData.channelId);
+                        report += `✅ Wiped ${deleted} channels\n`;
+                    } else if (action.type === 'CREATE_MAIN_STRUCTURE') {
+                        await createMainStructure(wipeData.guild);
+                        report += "✅ Created Main Structure\n";
+                    } else if (action.type === 'INITIALIZE') {
+                        await initializeAgencies(wipeData.guild, action.agencies);
+                        report += `✅ Initialized ${action.agencies.length} agencies\n`;
+                    } else if (action.type === 'MAP') {
+                        const downline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.downline, wipeData.guild.id]);
+                        const upline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.upline, wipeData.guild.id]);
+                        if (downline.rows.length > 0 && upline.rows.length > 0) {
+                            await mapHierarchy(wipeData.guild, downline.rows[0].agency_id, upline.rows[0].agency_id);
+                            report += `✅ Mapped ${action.downline} → ${action.upline}\n`;
+                        }
+                    }
+                } catch (e) {
+                    report += `❌ Error: ${e.message}\n`;
+                }
+            }
+            await wipeData.interaction.editReply({ content: report, embeds: [], components: [] });
+        }
+
+        if (interaction.customId.startsWith('cancel_wipe_')) {
+            const wipeId = interaction.customId.replace('cancel_wipe_', '');
+            pendingWipes.delete(wipeId);
+            return interaction.update({ content: '❌ Wipe cancelled. No changes made.', embeds: [], components: [] });
+        }
+
+        if (interaction.customId.startsWith('confirm_wipe_template_')) {
+            const wipeId = interaction.customId.replace('confirm_wipe_template_', '');
+            const wipeData = pendingWipes.get(wipeId);
+            
+            if (!wipeData) {
+                return interaction.reply({ content: '❌ Wipe session expired. Please start over.', ephemeral: true });
+            }
+
+            await interaction.deferUpdate();
+            pendingWipes.delete(wipeId);
+
+            let report = "🚀 **Executing Build (with wipe)...**\n";
+            for (const action of wipeData.actions) {
+                try {
+                    if (action.type === 'WIPE') {
+                        const deleted = await executeWipe(wipeData.guild, wipeData.channelId);
+                        report += `✅ Wiped ${deleted} channels\n`;
+                    } else if (action.type === 'CREATE_MAIN_STRUCTURE') {
+                        await createMainStructure(wipeData.guild);
+                        report += "✅ Created Main Structure\n";
+                    } else if (action.type === 'INITIALIZE') {
+                        await initializeAgencies(wipeData.guild, action.agencies);
+                        report += `✅ Initialized ${action.agencies.length} agencies\n`;
+                    } else if (action.type === 'MAP') {
+                        const downline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.downline, wipeData.guild.id]);
+                        const upline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [action.upline, wipeData.guild.id]);
+                        if (downline.rows.length > 0 && upline.rows.length > 0) {
+                            await mapHierarchy(wipeData.guild, downline.rows[0].agency_id, upline.rows[0].agency_id);
+                            report += `✅ Mapped ${action.downline} → ${action.upline}\n`;
+                        }
+                    }
+                } catch (e) {
+                    report += `❌ Error: ${e.message}\n`;
+                }
+            }
+            await wipeData.originalMessage.reply({ content: report, embeds: [], components: [] });
+        }
+
+        if (interaction.customId.startsWith('cancel_wipe_template_')) {
+            const wipeId = interaction.customId.replace('cancel_wipe_template_', '');
+            pendingWipes.delete(wipeId);
+            return interaction.update({ content: '❌ Wipe cancelled. No changes made.', embeds: [], components: [] });
+        }
     }
 
     // 3. Handle Modals
@@ -386,8 +683,13 @@ client.on(Events.InteractionCreate, async interaction => {
             
             await interaction.deferReply({ ephemeral: true });
             
+            let assignedRoleName = null;
+
             // Assign Role if coming from onboarding
             if (roleId) {
+                const role = await interaction.guild.roles.fetch(roleId);
+                assignedRoleName = role ? role.name : null;
+
                 await interaction.member.roles.add(roleId).catch(console.error);
                 
                 // Remove Unassigned
@@ -398,6 +700,26 @@ client.on(Events.InteractionCreate, async interaction => {
                 
                 // Log Onboarding
                 await pool.query('INSERT INTO onboarding (guild_id, user_id, role_id) VALUES ($1, $2, $3)', [interaction.guild.id, interaction.user.id, roleId]);
+
+                // Post Welcome Announcement
+                const announcementChannel = interaction.guild.channels.cache.find(
+                    c => c.name.includes('announcements') && c.type === ChannelType.GuildText
+                );
+
+                if (announcementChannel) {
+                    const welcomeEmbed = new EmbedBuilder()
+                        .setTitle('🎉 New Agent Joined!')
+                        .setDescription(`Please welcome **${agentName}** to the team!`)
+                        .addFields(
+                            { name: 'Agency', value: `<@&${roleId}>`, inline: true },
+                            { name: 'Member', value: `<@${interaction.user.id}>`, inline: true }
+                        )
+                        .setColor('#00FF00')
+                        .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
+                        .setTimestamp();
+
+                    await announcementChannel.send({ embeds: [welcomeEmbed] });
+                }
             }
             
             // Save Mapping
@@ -407,7 +729,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 [interaction.guild.id, interaction.user.id, agentName]
             );
 
-            return interaction.editReply(`✅ Registered as **${agentName}**! Your nickname badges will sync automatically.`);
+            return interaction.editReply(`✅ Registered as **${agentName}**${assignedRoleName ? ` with **${assignedRoleName}**` : ''}! Your nickname badges will sync automatically.`);
         }
 
         if (interaction.customId === 'leader_code_modal') {

@@ -33,8 +33,7 @@ async function createMainStructure(guild) {
                 { name: 'announcements 📣', type: ChannelType.GuildText }
             ],
             permissions: [
-                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.AddReactions] },
-                { id: guild.id, deny: [PermissionsBitField.Flags.SendMessages] }
+                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.AddReactions], deny: [PermissionsBitField.Flags.SendMessages] }
             ]
         },
         {
@@ -47,7 +46,7 @@ async function createMainStructure(guild) {
                 { name: 'hall-of-fame', type: ChannelType.GuildText }
             ],
             permissions: [
-                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel], deny: [PermissionsBitField.Flags.SendMessages] }
+                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.AddReactions], deny: [PermissionsBitField.Flags.SendMessages] }
             ]
         },
         {
@@ -56,7 +55,7 @@ async function createMainStructure(guild) {
                 { name: 'live-wins', type: ChannelType.GuildText }
             ],
             permissions: [
-                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel], deny: [PermissionsBitField.Flags.SendMessages] }
+                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.AddReactions], deny: [PermissionsBitField.Flags.SendMessages] }
             ]
         },
         {
@@ -66,7 +65,7 @@ async function createMainStructure(guild) {
                 { name: 'carrier-contact ☎️', type: ChannelType.GuildText }
             ],
             permissions: [
-                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel], deny: [PermissionsBitField.Flags.SendMessages] }
+                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.AddReactions], deny: [PermissionsBitField.Flags.SendMessages] }
             ]
         },
         {
@@ -76,7 +75,7 @@ async function createMainStructure(guild) {
                 { name: 'lead-vendors 💻', type: ChannelType.GuildText }
             ],
             permissions: [
-                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel], deny: [PermissionsBitField.Flags.SendMessages] }
+                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.AddReactions], deny: [PermissionsBitField.Flags.SendMessages] }
             ]
         },
         {
@@ -86,7 +85,7 @@ async function createMainStructure(guild) {
                 { name: 'underwriting-questions 📝', type: ChannelType.GuildText }
             ],
             permissions: [
-                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+                { id: guild.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AddReactions] }
             ]
         }
     ];
@@ -170,19 +169,66 @@ async function initializeAgencies(guild, agenciesList) {
         // 3. Create Channels
         const slug = name.toLowerCase().replace(/\s+/g, '-');
         
-        // Text Channels
+        // Text Channels with specific permissions
         const textChannels = [
-            { name: `${slug}-general`, type: ChannelType.GuildText },
-            { name: `${slug}-wins`, type: ChannelType.GuildText },
-            { name: `${slug}-digest`, type: ChannelType.GuildText, private: true },
-            { name: `${slug}-resources`, type: ChannelType.GuildText }
+            { name: `${slug}-general`, type: ChannelType.GuildText, agentCanSend: true },
+            { name: `${slug}-wins`, type: ChannelType.GuildText, agentCanSend: true },
+            { name: `${slug}-digest`, type: ChannelType.GuildText, leaderOnly: true },
+            { name: `${slug}-resources`, type: ChannelType.GuildText, agentCanSend: false }
         ];
 
         for (const ch of textChannels) {
-            const overwrites = [...categoryPermissions];
-            if (ch.private) {
-                // Digest is only for leaders and admins
-                overwrites.push({ id: agentRole.id, deny: [PermissionsBitField.Flags.ViewChannel] });
+            let overwrites = [];
+
+            if (ch.leaderOnly) {
+                // Digest: Leaders only, agents cannot view
+                overwrites = [
+                    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: agentRole.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: leaderRole.id, allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.AddReactions,
+                        PermissionsBitField.Flags.ManageMessages
+                    ]}
+                ];
+            } else if (ch.agentCanSend) {
+                // General & Wins: Full agent permissions
+                overwrites = [
+                    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: agentRole.id, allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.AddReactions,
+                        PermissionsBitField.Flags.AttachFiles,
+                        PermissionsBitField.Flags.EmbedLinks,
+                        PermissionsBitField.Flags.ReadMessageHistory
+                    ]},
+                    { id: leaderRole.id, allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.AddReactions,
+                        PermissionsBitField.Flags.ManageMessages,
+                        PermissionsBitField.Flags.AttachFiles,
+                        PermissionsBitField.Flags.EmbedLinks
+                    ]}
+                ];
+            } else {
+                // Resources: View + React only for agents
+                overwrites = [
+                    { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: agentRole.id, allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.AddReactions,
+                        PermissionsBitField.Flags.ReadMessageHistory
+                    ], deny: [PermissionsBitField.Flags.SendMessages] },
+                    { id: leaderRole.id, allow: [
+                        PermissionsBitField.Flags.ViewChannel,
+                        PermissionsBitField.Flags.SendMessages,
+                        PermissionsBitField.Flags.AddReactions,
+                        PermissionsBitField.Flags.ManageMessages
+                    ]}
+                ];
             }
 
             await guild.channels.create({
@@ -198,9 +244,7 @@ async function initializeAgencies(guild, agenciesList) {
             { name: `${name} Meeting Room`, type: ChannelType.GuildVoice },
             { name: `${name} Dial Room 1`, type: ChannelType.GuildVoice },
             { name: `${name} Dial Room 2`, type: ChannelType.GuildVoice },
-            { name: `${name} Dial Room 3`, type: ChannelType.GuildVoice },
-            { name: `${name} Dial Room 4`, type: ChannelType.GuildVoice },
-            { name: `${name} Dial Room 5`, type: ChannelType.GuildVoice }
+            { name: `${name} Dial Room 3`, type: ChannelType.GuildVoice }
         ];
 
         for (const ch of voiceChannels) {
