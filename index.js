@@ -255,14 +255,29 @@ client.on(Events.InteractionCreate, async interaction => {
             const unassignedRole = interaction.options.getRole('unassigned-role');
             const owner = interaction.options.getUser('owner');
             
-            await pool.query(
-                `INSERT INTO server_config (guild_id, server_name, unassigned_role_id, owner_discord_id) 
-                 VALUES ($1, $2, $3, $4) ON CONFLICT (guild_id) DO UPDATE 
-                 SET unassigned_role_id = EXCLUDED.unassigned_role_id, owner_discord_id = EXCLUDED.owner_discord_id`,
-                [interaction.guild.id, interaction.guild.name, unassignedRole?.id, owner?.id]
-            );
+            // Debug logging
+            console.log('setup-server called');
+            console.log('Guild:', interaction.guild?.id, interaction.guild?.name);
+            console.log('Unassigned Role:', unassignedRole?.id, unassignedRole?.name);
+            console.log('Owner:', owner?.id, owner?.username);
             
-            return interaction.reply({ content: "Server config updated.", ephemeral: true });
+            if (!interaction.guild) {
+                return interaction.reply({ content: "❌ This command must be run in a server, not DMs.", ephemeral: true });
+            }
+            
+            try {
+                await pool.query(
+                    `INSERT INTO server_config (guild_id, server_name, unassigned_role_id, owner_discord_id) 
+                     VALUES ($1, $2, $3, $4) ON CONFLICT (guild_id) DO UPDATE 
+                     SET unassigned_role_id = EXCLUDED.unassigned_role_id, owner_discord_id = EXCLUDED.owner_discord_id`,
+                    [interaction.guild.id, interaction.guild.name, unassignedRole?.id || null, owner?.id || null]
+                );
+                
+                return interaction.reply({ content: `✅ Server config updated!\n• Unassigned Role: ${unassignedRole?.name || 'Not set'}\n• Owner: ${owner?.username || 'Not set'}`, ephemeral: true });
+            } catch (dbError) {
+                console.error("Database Error in setup-server:", dbError);
+                return interaction.reply({ content: `❌ Database error: ${dbError.message}\n\nMake sure your DATABASE_URL is correct and the database schema has been created.`, ephemeral: true });
+            }
         }
 
         if (commandName === 'add-leader-code') {

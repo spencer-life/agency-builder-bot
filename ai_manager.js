@@ -1,15 +1,14 @@
 const { GoogleGenAI } = require("@google/genai");
 require('dotenv').config();
 
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
+// Initialize the client correctly for the new SDK
+const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 /**
- * Parses natural language instructions for agency setup using Gemini 3 Flash.
+ * Parses natural language instructions for agency setup using Gemini 2.0 Flash.
  * Optimized for full server builds and incremental additions.
  */
 async function parseInsuranceCommand(input) {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Using 1.5 flash as 3 flash might be too new for the SDK version
-
   const prompt = `
     You are an AI assistant for the "Agency Builder Bot" Discord system. 
     Your task is to take natural language instructions for building an insurance agency structure and convert them into a JSON format the bot can execute.
@@ -51,15 +50,19 @@ async function parseInsuranceCommand(input) {
     `;
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    let text = response.text();
+    const response = await client.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
+        config: {
+            responseMimeType: 'application/json',
+        }
+    });
     
-    // Clean up markdown
-    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    
-    const parsed = JSON.parse(text);
-    return parsed;
+    // The new SDK handles JSON parsing automatically with responseMimeType
+    // But we still robustly handle string/object returns
+    const result = response.parsed;
+    return result;
+
   } catch (error) {
     console.error("AI Parsing Error:", error);
     return null;
@@ -70,11 +73,9 @@ async function parseInsuranceCommand(input) {
  * Specifically for the interactive /war-room wizard to process steps
  */
 async function processWizardStep(step, input) {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
     let systemPrompt = "";
     if (step === 1) {
-        systemPrompt = "Extract the name of the main insurance agency from this text. Return JUST the name.";
+        systemPrompt = "Extract the name of the main insurance agency from this text. Return JUST the name as a plain string.";
     } else if (step === 2) {
         systemPrompt = "Extract a list of sub-agencies from this text. Return as a JSON array of strings.";
     } else if (step === 3) {
@@ -82,16 +83,26 @@ async function processWizardStep(step, input) {
     }
 
     try {
-        const result = await model.generateContent(`${systemPrompt}\n\nUser Input: "${input}"`);
-        const response = await result.response;
-        let text = response.text().trim();
+        const response = await client.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: `${systemPrompt}\n\nUser Input: "${input}"`
+        });
+
+        // Handle text vs JSON responses based on the step
+        let text = response.text();
         
+        // Clean markdown if present
         if (text.startsWith('```')) {
-            text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+            text = text.replace(/json/g, "").replace(/```/g, "").trim();
         }
-        
+
         try {
-            return JSON.parse(text);
+            // For steps 2 and 3, we expect JSON
+            if (step === 2 || step === 3) {
+                return JSON.parse(text);
+            }
+            // For step 1, just return the text
+            return text;
         } catch (e) {
             return text;
         }
