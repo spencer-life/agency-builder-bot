@@ -127,7 +127,7 @@ async function initializeAgencies(guild, agenciesList) {
     console.log(`Initializing ${agenciesList.length} agencies for ${guild.name}...`);
     
     for (const agency of agenciesList) {
-        const { name, emoji, is_main } = agency;
+        const { name, emoji, is_main, color } = agency;
         
         // 1. Create Roles
         const leaderRole = await guild.roles.create({
@@ -138,7 +138,7 @@ async function initializeAgencies(guild, agenciesList) {
 
         const agentRole = await guild.roles.create({
             name: name,
-            color: '#3498DB',
+            color: color || '#3498DB',
             reason: `Setup for ${name}`
         });
 

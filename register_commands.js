@@ -92,6 +92,15 @@ const commands = [
                 .setDescription('Main agency name for the title (default: server name)')),
 
     new SlashCommandBuilder()
+        .setName('deploy-diligence')
+        .setDescription('Deploy the full Diligence Agencies structure (Hardcoded)'),
+
+    new SlashCommandBuilder()
+        .setName('delete-channels')
+        .setDescription('Delete specific channels by ID')
+        .addStringOption(option => option.setName('ids').setDescription('Comma separated list of channel IDs').setRequired(true)),
+
+    new SlashCommandBuilder()
         .setName('bulk-assign-unassigned')
         .setDescription('Assign the Unassigned role to all existing server members'),
 

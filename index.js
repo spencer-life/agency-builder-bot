@@ -132,6 +132,8 @@ client.on(Events.InteractionCreate, async interaction => {
             'map-hierarchy',
             'build-template',
             'deploy-welcome-guide',
+            'deploy-diligence',
+            'delete-channels',
             'bulk-assign-unassigned'
         ];
         if (adminCommands.includes(commandName) && interaction.user.id !== SPENCER_ID) {
@@ -522,6 +524,103 @@ client.on(Events.InteractionCreate, async interaction => {
 
             await interaction.channel.send({ embeds: [welcomeEmbed] });
             return interaction.reply({ content: '✅ Welcome guide deployed!', ephemeral: true });
+        }
+
+        if (commandName === 'delete-channels') {
+            const ids = interaction.options.getString('ids').split(',').map(id => id.trim());
+            await interaction.deferReply({ ephemeral: true });
+            
+            let deletedCount = 0;
+            let errors = [];
+
+            for (const id of ids) {
+                try {
+                    const channel = await interaction.guild.channels.fetch(id);
+                    if (channel) {
+                        await channel.delete();
+                        deletedCount++;
+                    }
+                } catch (e) {
+                    errors.push(`${id}: ${e.message}`);
+                }
+            }
+            
+            let response = `✅ Deleted ${deletedCount} channels.`;
+            if (errors.length > 0) {
+                response += `\n❌ Errors:\n${errors.join('\n')}`;
+            }
+            return interaction.editReply(response);
+        }
+
+        if (commandName === 'deploy-diligence') {
+            await interaction.deferReply({ ephemeral: false });
+            let log = "🚀 **Deploying Diligence Structure...**\n";
+            
+            try {
+                // Step 1: Main Structure
+                await createMainStructure(interaction.guild);
+                log += "✅ Created Main Structure\n";
+
+                // Step 2: Initialize Agencies
+                const agencies = [
+                    { name: 'Diligence Agencies', emoji: '🏢', color: '#C0C0C0', is_main: true },
+                    { name: 'Gumption Agencies', emoji: '💪', color: '#2ECC71' },
+                    { name: 'Grand Capital Financial', emoji: '💰', color: '#F1C40F' },
+                    { name: 'High Caliber Agencies', emoji: '🎯', color: '#E74C3C' },
+                    { name: 'Syndicate Agencies', emoji: '🤝', color: '#3498DB' },
+                    { name: 'Mentality Agencies', emoji: '🧠', color: '#9B59B6' },
+                    { name: 'Centurion Financial', emoji: '⚔️', color: '#E67E22' },
+                    { name: 'Founders Financial Group', emoji: '🌟', color: '#1ABC9C' },
+                    { name: 'Desire Agencies', emoji: '🔥', color: '#FF5733' },
+                    { name: 'Aegis Financial', emoji: '🛡️', color: '#34495E' },
+                    { name: 'Fly High Financial', emoji: '🚀', color: '#FF69B4' },
+                    { name: 'Revival', emoji: '♻️', color: '#27AE60' },
+                    { name: 'Tenacity Life Group', emoji: '💎', color: '#00BCD4' }
+                ];
+                
+                await initializeAgencies(interaction.guild, agencies);
+                log += `✅ Initialized ${agencies.length} agencies with colors\n`;
+
+                // Step 3: Map Hierarchy
+                const hierarchy = [
+                    ['Syndicate Agencies', 'High Caliber Agencies'],
+                    ['High Caliber Agencies', 'Gumption Agencies'],
+                    ['Grand Capital Financial', 'Gumption Agencies'],
+                    ['Gumption Agencies', 'Diligence Agencies'],
+                    ['Centurion Financial', 'Mentality Agencies'],
+                    ['Founders Financial Group', 'Mentality Agencies'],
+                    ['Mentality Agencies', 'Diligence Agencies'],
+                    ['Aegis Financial', 'Desire Agencies'],
+                    ['Fly High Financial', 'Desire Agencies'],
+                    ['Desire Agencies', 'Diligence Agencies'],
+                    ['Revival', 'Diligence Agencies'],
+                    ['Tenacity Life Group', 'Diligence Agencies']
+                ];
+
+                for (const [down, up] of hierarchy) {
+                    try {
+                        const downline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [down, interaction.guild.id]);
+                        const upline = await pool.query('SELECT agency_id FROM agencies WHERE name = $1 AND guild_id = $2', [up, interaction.guild.id]);
+                        
+                        if (downline.rows.length > 0 && upline.rows.length > 0) {
+                            await mapHierarchy(interaction.guild, downline.rows[0].agency_id, upline.rows[0].agency_id);
+                            log += `✅ Mapped ${down} → ${up}\n`;
+                        } else {
+                            log += `⚠️ Could not find agencies: ${down} → ${up}\n`;
+                        }
+                    } catch (err) {
+                        log += `❌ Error mapping ${down} -> ${up}: ${err.message}\n`;
+                    }
+                }
+                
+                log += "\n✨ **Deployment Complete!**";
+
+            } catch (error) {
+                console.error(error);
+                log += `\n❌ **CRITICAL ERROR:** ${error.message}`;
+            }
+
+            return interaction.editReply(log);
         }
 
         if (commandName === 'bulk-assign-unassigned') {
